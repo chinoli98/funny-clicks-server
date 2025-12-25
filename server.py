@@ -8,8 +8,7 @@ import sqlite3
 # --- CONFIGURACIÓN ---
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
-CORS(app)
-DATABASE_FILE = 'withdrawals.db'
+CORS(app)DATABASE_FILE = 'withdrawals.db'
 
 # --- CONFIGURACIÓN DE TELEGRAM ---
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -36,6 +35,9 @@ def init_db():
     except Exception as e:
         logging.error(f"Error al inicializar la base de datos: {e}", exc_info=True)
 
+# <<< ¡CORRECCIÓN IMPORTANTE! INICIALIZAMOS LA BD AL ARRANCAR EL SCRIPT >>>
+init_db()
+
 # --- RUTA PARA QUE LA APP ENVÍE UN NUEVO RETIRO ---
 @app.route("/submit-withdrawal", methods=['POST'])
 def handle_withdrawal():
@@ -43,7 +45,7 @@ def handle_withdrawal():
     if not data or not all(k in data for k in ["date", "amount", "binanceId"]):
         return jsonify({"status": "error", "message": "Datos mal formados"}), 400
 
-    request_id = data.get('date') # Usamos la fecha como ID único para la app
+    request_id = data.get('date') 
     amount = data.get('amount')
     binance_id = data.get('binanceId')
 
@@ -54,7 +56,7 @@ def handle_withdrawal():
             "INSERT INTO withdrawals (request_id, amount, binance_id, status) VALUES (?, ?, ?, ?)",
             (request_id, amount, binance_id, 'Pendiente')
         )
-        db_id = cursor.lastrowid # Obtenemos el ID numérico de la base de datos
+        db_id = cursor.lastrowid
         conn.commit()
         conn.close()
         logging.info(f"Nuevo retiro guardado en la BD con ID: {db_id}")
@@ -67,7 +69,6 @@ def handle_withdrawal():
             f"🔵 *Estado:* Pendiente"
         )
         
-        # Enviamos la notificación a Telegram con el botón que usa el ID de la BD
         send_telegram_notification(message_text, db_id)
         return jsonify({"status": "success"})
 
@@ -75,7 +76,24 @@ def handle_withdrawal():
         logging.error(f"Error al procesar el retiro: {e}", exc_info=True)
         return jsonify({"status": "error", "message": "Error interno del servidor"}), 500
 
-# --- RUTA PARA QUE TELEGRAM AVISE CUANDO PULSAS EL BOTÓN ---
+# --- CÓDIGO RESTANTE (WEBHOOKS, ETC.) ---
+
+def send_telegram_notification(message, db_id):
+    if not BOT_TOKEN or not CHAT_ID:
+        logging.error("ERROR CRÍTICO: No se encontraron las variables de entorno de Telegram.")
+        return False
+    
+    keyboard = {"inline_keyboard": [[{"text": "✅ Marcar como Pagado", "callback_data": f"paid_{db_id}"}]]}
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown", "reply_markup": keyboard}
+    
+    try:
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        return True
+    except requests.exceptions.RequestException:
+        return False
+
 @app.route("/telegram-webhook", methods=['POST'])
 def handle_telegram_updates():
     update = request.get_json()
@@ -87,33 +105,25 @@ def handle_telegram_updates():
         if data.startswith("paid_"):
             db_id = data.split("_")[1]
             try:
-                # Actualiza el estado en la base de datos
                 conn = sqlite3.connect(DATABASE_FILE)
                 cursor = conn.cursor()
                 cursor.execute("UPDATE withdrawals SET status = ? WHERE id = ?", ('Pagado', db_id))
                 conn.commit()
                 conn.close()
-                logging.info(f"Retiro ID {db_id} marcado como 'Pagado' en la BD.")
 
-                # Edita el mensaje original en Telegram
                 message = query["message"]
                 new_text = message["text"].replace("🔵 *Estado:* Pendiente", "🟢 *Estado:* Pagado")
                 edit_url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
-                payload = {
-                    "chat_id": message["chat"]["id"], "message_id": message["message_id"],
-                    "text": new_text, "parse_mode": "Markdown", "reply_markup": {"inline_keyboard": []}
-                }
+                payload = {"chat_id": message["chat"]["id"], "message_id": message["message_id"], "text": new_text, "parse_mode": "Markdown", "reply_markup": {"inline_keyboard": []}}
                 requests.post(edit_url, json=payload)
                 
-                # Responde al clic
                 answer_url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
                 requests.post(answer_url, json={"callback_query_id": query_id, "text": "¡Marcado como pagado!"})
             except Exception as e:
-                logging.error(f"Error al procesar el callback de Telegram: {e}", exc_info=True)
+                logging.error(f"Error al procesar callback: {e}", exc_info=True)
 
     return "ok", 200
 
-# --- NUEVA RUTA PARA QUE LA APP CONSULTE EL ESTADO ---
 @app.route("/check-status", methods=['POST'])
 def check_status():
     data = request.get_json(silent=True)
@@ -125,22 +135,17 @@ def check_status():
     try:
         conn = sqlite3.connect(DATABASE_FILE)
         cursor = conn.cursor()
-        # Creamos un placeholder '?' por cada ID para una consulta segura
         placeholders = ','.join('?' for _ in request_ids)
         query = f"SELECT request_id, status FROM withdrawals WHERE request_id IN ({placeholders})"
         cursor.execute(query, request_ids)
         rows = cursor.fetchall()
         for row in rows:
-            statuses[row[0]] = row[1] # Mapea request_id -> status
+            statuses[row[0]] = row[1]
         conn.close()
     except Exception as e:
-        logging.error(f"Error al consultar estados en la BD: {e}", exc_info=True)
+        logging.error(f"Error al consultar estados: {e}", exc_info=True)
     
     return jsonify(statuses)
 
-
-# --- INICIO DEL SERVIDOR ---
 if __name__ == '__main__':
-    init_db() # Se asegura de que la base de datos y la tabla existan al arrancar
-    # Gunicorn usará esta configuración para poner el servidor en marcha
     app.run(host="0.0.0.0", port=10000)
