@@ -8,7 +8,8 @@ import sqlite3
 # --- CONFIGURACIÓN ---
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
-CORS(app)DATABASE_FILE = 'withdrawals.db'
+CORS(app)
+DATABASE_FILE = 'withdrawals.db'
 
 # --- CONFIGURACIÓN DE TELEGRAM ---
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -132,6 +133,7 @@ def check_status():
 
     request_ids = data["request_ids"]
     statuses = {}
+    
     try:
         conn = sqlite3.connect(DATABASE_FILE)
         cursor = conn.cursor()
