@@ -1,30 +1,45 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import logging
 
-# Configura un registro básico para ver todo en los logs de Render
+# Configura un registro muy detallado
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
+# Habilita CORS para ser más tolerante a las conexiones
+CORS(app)
 
-# Una ruta de prueba para verificar si el servidor está vivo desde un navegador
+# Ruta para verificar desde un navegador
 @app.route("/")
 def health_check():
-    logging.info("¡El servidor está vivo! Se ha accedido a la ruta principal.")
-    return "El servidor de Funny Clicks está funcionando."
+    logging.info("Ruta principal '/' fue visitada (Health Check).")
+    return "El servidor de Funny Clicks está funcionando y listo."
 
-# La ruta que llama tu aplicación
-@app.route("/submit-withdrawal", methods=["POST"])
+# Ruta para recibir las solicitudes de retiro
+@app.route("/submit-withdrawal", methods=['POST'])
 def handle_withdrawal():
-    logging.info("¡ÉXITO! Se ha recibido una solicitud de retiro desde la app.")
-    data = request.get_json(silent=True)
-    if data:
-        logging.info(f"Datos recibidos: {data}")
-    else:
-        logging.info("La solicitud no contenía datos JSON.")
+    # Este es el primer mensaje que deberíamos ver si la app conecta
+    logging.info("¡CONEXIÓN RECIBIDA! La ruta /submit-withdrawal fue alcanzada.")
     
-    # Siempre responde que todo fue bien para esta prueba
-    logging.info("Enviando respuesta de éxito a la app.")
-    return jsonify({"status": "success", "message": "Prueba del servidor exitosa"})
+    try:
+        # Intenta obtener los datos JSON
+        data = request.get_json(silent=True)
+        if data:
+            logging.info(f"Datos JSON recibidos con éxito: {data}")
+        else:
+            # Si no hay JSON, registra los datos en bruto que llegaron
+            raw_data = request.data
+            logging.warning(f"No se pudo decodificar JSON. Datos en bruto recibidos: {raw_data}")
+        
+        # Responde a la app que todo está bien
+        logging.info("Enviando respuesta de éxito a la app.")
+        return jsonify({"status": "success", "message": "Servidor recibió la petición."})
+
+    except Exception as e:
+        # Si algo dentro de esta función falla, lo registrará
+        logging.error(f"¡ERROR DENTRO DE LA FUNCIÓN! -> {e}", exc_info=True)
+        return jsonify({"status": "error", "message": "Error interno del servidor."}), 500
 
 if __name__ == "__main__":
+    # Gunicorn usará esta configuración
     app.run(host="0.0.0.0", port=10000)
